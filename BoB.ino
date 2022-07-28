@@ -71,105 +71,96 @@
  *  o/ เขียนโค๊ด python เพื่อพยากรณ์อุณหภูมิในช่วงเวลาถัดๆไป โดยใช้ linear regression
  *  o? ปรับปรุง code ให้สั้นลงและดูง่ายขึ้น เพื่อลดการใช้พื้นที่หน่วยความจำ
 */  
+//==================================================================================================
+#include <WiFi.h>     // WiFi Library provides method for calling to connect to network.
+#include "time.h"     // Library for getting date and time from NTP-server
 
+#include <HTTPClient.h>                         // Library for HTTP GET, POST and PUT requests to a web server.
+#define WebHooksKey "dlkwtXM2TQ7EMfQArqQqd6"    // Define your WebHooks Key
+#define WebHooksEventName "Temp&Humid_Sheet"    // Define your WebHooks Event name
 
-#include <WiFi.h>
-#include "time.h"
+const char* ssid = "Hanawu";                    // Your WiFi name
+const char* password = "hanawu547821801821";    // WiFi password
+const char* ntpServer = "pool.ntp.org";         // address of the NTP Server 
+const long  gmtOffset_sec = 25200;              // UTC offset
+const int   daylightOffset_sec = 0;             // Daylight offset
+#define delaytime 250                           // Define delay time using to delay programs
 
-#include <HTTPClient.h> 
-#define WebHooksKey "dlkwtXM2TQ7EMfQArqQqd6" 
-#define WebHooksEventName "Temp&Humid_Sheet"
+//######################## Declare pins for TM1638 ########################
+#include <TM1638plus.h>         // Includes Library to control TM1638 7-segments modules
+#define Brd_STB 15              // strobe = GPIO connected to strobe line of module 
+#define Brd_CLK 27              // clock = GPIO connected to clock line of module 
+#define Brd_DIO 4               // data = GPIO connected to data line of module 
 
-const char* ssid = "Hanawu";
-const char* password = "hanawu547821801821";
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 25200;
-const int   daylightOffset_sec = 0;
-#define delaytime 250
+#define Brd_STB_2 5             // strobe = GPIO connected to strobe line of module 
+#define Brd_CLK_2 18            // clock = GPIO connected to clock line of module 
+#define Brd_DIO_2 19            // data = GPIO connected to data line of module 
+bool high_freq = true;          // default false,, If using a high freq CPU > ~100 MHZ set to true.
 
-//############ Declare pins for TM1638 ############
-#include <TM1638plus.h> 
-#define Brd_STB 15        // strobe = GPIO connected to strobe line of module 
-#define Brd_CLK 27        // clock = GPIO connected to clock line of module 
-#define Brd_DIO 4         // data = GPIO connected to data line of module 
-
-#define Brd_STB_2 5       // strobe = GPIO connected to strobe line of module 
-#define Brd_CLK_2 18      // clock = GPIO connected to clock line of module 
-#define Brd_DIO_2 19      // data = GPIO connected to data line of module 
-bool high_freq = true;    // default false,, If using a high freq CPU > ~100 MHZ set to true. 
-TM1638plus tm(Brd_STB, Brd_CLK , Brd_DIO, high_freq); 
+// Initialize variable for using 2 TM1638 modules
+TM1638plus tm(Brd_STB, Brd_CLK , Brd_DIO, high_freq);         
 TM1638plus tm2(Brd_STB_2, Brd_CLK_2 , Brd_DIO_2, high_freq); 
 
-//############ Declare pins for MAX7219 7-segment ############
-#define DIN 13    // this pin is connected to DataIn 
-#define CS 12     // this pin is connected to LOAD 
-#define CLK 14    // this pin is connected to CLK 
-#include "LedController.hpp"
-LedController lc;
+//######################## Declare pins for MAX7219 7-segment ########################
+#define DIN 13                  // this pin is connected to DataIn 
+#define CS 12                   // this pin is connected to LOAD 
+#define CLK 14                  // this pin is connected to CLK 
+#include "LedController.hpp"    // Includes Library for controlling MAX7219 7-segments
+LedController lc;               // Declare variable named "lc" for controlling MAX7219 7-segments
+  
+//######################## Declare pins for DHT-11 ########################
+#include "DHTesp.h"             // Includes Library for using DHT-11
+#define DHT_pin 23              // Define pin for DHT11
+DHTesp dht;                     // Declare variable named "dht" for using DHT-11
 
-//############ Declare pins for DHT-11 ############
-#include "DHTesp.h"
-#define DHT_pin 23
-DHTesp dht;
-
-//#define sensor 26
-
-#define wakeUpBtn 0
+#define wakeUpBtn 0             // Define interrupt pin (using Boot button on ESP32)
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED; 
+//==================================================================================================
 
-//////////////////////////////////////////////
+//==================================================================================================
+int Time_Obtain_status = 0;     // Integer for specify Time obtaining status
+int BoB_position = 0;           // Integer for specify BoB's posistion on TM1638
+int strLength;                  // String length
+int sleep_status = 0;           // Integer for specify Sleeping status
+int wakeup_status = 0;          // Integer for specify Wake up status
+int blink_status = 0;           // Integer for specify Blinking eye status
+int mouth_status = 0;           // Integer for specify Month status while it's speaking
 
+String Sid = "b6302245";        // Student ID
+String strInput;                // String for getting String from serial input
+  
+int count = 0;                  // Integer for store count 
 
-//////////////////////////////////////////////
-int Time_Obtain_status = 0;
-int WIFI_status = 0;
-int BoB_position = 0;
-int strLength;
-int sleep_status = 0;
-int wakeup_status = 0;
-int blink_status = 0;
-int mouth_status = 0;
+int IFTTT_status = 0;           // Integer for IFTTT status
 
-String Sid = "b6302245";
-String strInput;
-
-int count = 0;
-
-int IFTTT_status = 0;
-int DHT11_status = 0;
-
-//////////////////////////////////////////////
-
-
-////////////////////////// Declare Tasks  //////////////////////////
-TaskHandle_t TaskA = NULL;
-TaskHandle_t TaskB = NULL;
-TaskHandle_t TaskC = NULL;
+//############################ Task varibles ############################
+TaskHandle_t IdleFaceTask = NULL;
+TaskHandle_t SpeakingTask = NULL;
+TaskHandle_t SendingToSheetTask = NULL;
 TaskHandle_t IdleTextTask = NULL;
-////////////////////////////////////////////////////////////////////
 
+//==================================================================================================
+//############################ The interrupt handling function ############################
 void IRAM_ATTR handleInterrupt() { 
     portENTER_CRITICAL_ISR(&mux); 
     clear7Seg_max7219();
     sleep_status = 0; mouth_status = 1;
     wakeup_status = 1;
     portEXIT_CRITICAL_ISR(&mux); 
-    vTaskResume(TaskA);
+    vTaskResume(IdleFaceTask);
 } 
-
+//==================================================================================================
 
 void WifiSetup(){
     delay(50);
-    Serial.printf("Connecting to %s ", ssid);
-    WiFi.begin(ssid, password);
+    Serial.printf("Connecting to %s ", ssid);   // Serial monitor shows "Connecting to [Wifi name]"
+    WiFi.begin(ssid, password);                 
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
     }
     Serial.println(" CONNECTED");
-    //init and get the time
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    getLocalTime();
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); // Get date and time from an NTP server.
 } 
 
 
@@ -263,7 +254,7 @@ void sendTempAndHumidToSheet(){
 //################ Function show time ################
 void showTime(){ 
     getLocalTime();
-    vTaskSuspend(TaskA);        // Stop showing idle face 
+    vTaskSuspend(IdleFaceTask);        // Stop showing idle face 
     vTaskSuspend(IdleTextTask); // Stop saying "...."
     if (Time_Obtain_status == 1){
         while(1) {
@@ -718,9 +709,9 @@ void greetingCommand(){
 void showStudentID(){
     startSpeaking();
     sayShowId();                // Say "Show ID"
-    vTaskSuspend(TaskB);        // Stop speaking
+    vTaskSuspend(SpeakingTask);        // Stop speaking
     returnIdleFace();           // Return idle face
-    vTaskResume(TaskA);         // Continue showing idle face     
+    vTaskResume(IdleFaceTask);         // Continue showing idle face     
     for (int i = 0 ; i < 8 ; i++) {
         delay(delaytime); lc.setChar(0, 7-i , Sid[i] , false);
     }
@@ -740,9 +731,9 @@ void countNum(int count_status){
     clear7Seg_max7219(); delay(delaytime);
     startSpeaking();
     sayCountNum();              // Say "Let count Integer"
-    vTaskSuspend(TaskB);        // Stop speaking
+    vTaskSuspend(SpeakingTask);        // Stop speaking
     returnIdleFace();           // Show idle face
-    vTaskResume(TaskA);         // Continue showing idle face 
+    vTaskResume(IdleFaceTask);         // Continue showing idle face 
     String strCount;
     if (count_status == 0) {
         while (count < 10) {
@@ -801,9 +792,9 @@ void showTempAndHumid(){
     temp_unit = 'C';
     startSpeaking();
     sayDisplayTemp();           // Say "Enable DHT-11"
-    vTaskSuspend(TaskB);        // Stop speaking
+    vTaskSuspend(SpeakingTask);        // Stop speaking
     returnIdleFace();
-    vTaskResume(TaskA);         // Continue idle face
+    vTaskResume(IdleFaceTask);         // Continue idle face
     while (1) {
         String textCmd;
         textCmd = Serial.readString();  // String for Serial input command
@@ -813,11 +804,11 @@ void showTempAndHumid(){
         if (SwInput == 0x10 || textCmd == "Stop show temp & humid" 
         || textCmd == "Stop show temperature and humidity") { 
             clear7Seg_max7219();
-            vTaskSuspend(TaskA);        // Stop showing idle face
-            vTaskResume(TaskB);         // Start speaking   
+            vTaskSuspend(IdleFaceTask);        // Stop showing idle face
+            vTaskResume(SpeakingTask);         // Start speaking   
             sayStopDisplayTemp();       // Say "Stop display temp"
-            vTaskSuspend(TaskB);        // Stop speaking
-            vTaskResume(TaskA);         // Continue idle face
+            vTaskSuspend(SpeakingTask);        // Stop speaking
+            vTaskResume(IdleFaceTask);         // Continue idle face
             vTaskResume(IdleTextTask);  // saying "...."
             break; 
         }
@@ -825,8 +816,8 @@ void showTempAndHumid(){
         //------------ Statements for convert celcius to farenheit ------------
         else if (textCmd == "convert celcius to farenheit" || textCmd == "convert C to F" ){ 
             clear7Seg_max7219();        
-            vTaskSuspend(TaskA);        // Stop showing idle face
-            vTaskResume(TaskB);         // Start speaking   
+            vTaskSuspend(IdleFaceTask);        // Stop showing idle face
+            vTaskResume(SpeakingTask);         // Start speaking   
             String text[] = {"Convert" , "Celcius" , "to" , "Fahrenheit"};
             delay(delaytime); 
             for (int i = 0 ; i < 4 ; i++){
@@ -840,16 +831,16 @@ void showTempAndHumid(){
             }
             
             temp_unit = 'F';
-            vTaskSuspend(TaskB);        // Stop speaking
-            vTaskResume(TaskA);         // Continue idle face
+            vTaskSuspend(SpeakingTask);        // Stop speaking
+            vTaskResume(IdleFaceTask);         // Continue idle face
             delay(delaytime);
         }
 
         //------------ Statements for convert fahrenheit to celcius ------------
         else if (textCmd == "convert fahrenheit to celcius" || textCmd == "convert F to C" ){
             clear7Seg_max7219();
-            vTaskSuspend(TaskA);        // Stop showing idle face
-            vTaskResume(TaskB);         // Start speaking
+            vTaskSuspend(IdleFaceTask);        // Stop showing idle face
+            vTaskResume(SpeakingTask);         // Start speaking
             String text[] = {"Convert" , "Fahrenheit" , "to" , "Celcius"};
             delay(delaytime); 
             for (int i = 0 ; i < 4 ; i++){
@@ -862,8 +853,8 @@ void showTempAndHumid(){
                 delay(delaytime);
             }
             temp_unit = 'C'; 
-            vTaskSuspend(TaskB);        // Stop speaking
-            vTaskResume(TaskA);         // Continue idle face
+            vTaskSuspend(SpeakingTask);        // Stop speaking
+            vTaskResume(IdleFaceTask);         // Continue idle face
             delay(delaytime);
         }
         getTemp_and_Humid(temp_unit);   // Show Temperature & Humidity depend on temp's unit(C or F)
@@ -873,15 +864,15 @@ void showTempAndHumid(){
 ///////////////////////////////////////////////////////////////////
 void startSpeaking(){
     returnIdleFace();           // Show idle face
-    vTaskSuspend(TaskA);        // Stop showing idle face 
+    vTaskSuspend(IdleFaceTask);        // Stop showing idle face 
     vTaskSuspend(IdleTextTask); // Stop saying "...."
-    vTaskResume(TaskB);         // Start speaking   
+    vTaskResume(SpeakingTask);         // Start speaking   
 }
 
 void stopSpeaking(){
     returnIdleFace();           // Show idle face
-    vTaskResume(TaskA);         // Continue showing idle face 
-    vTaskSuspend(TaskB);        // Stop speaking
+    vTaskResume(IdleFaceTask);         // Continue showing idle face 
+    vTaskSuspend(SpeakingTask);        // Stop speaking
     vTaskResume(IdleTextTask);  // Continue saying "...."
 }
 ///////////////////////////////////////////////////////////////////
@@ -895,12 +886,12 @@ void setup() {
     delay(50);
     
     // ################## SETTING MULTITASK ##################
-    xTaskCreatePinnedToCore(func_TaskA, "TaskA", 2048 , NULL , tskIDLE_PRIORITY , &TaskA ,0);
-    xTaskCreatePinnedToCore(func_TaskB, "TaskB", 2048 , NULL , tskIDLE_PRIORITY , &TaskB ,0);
-    xTaskCreatePinnedToCore(func_TaskC, "TaskC", 2048 , NULL , tskIDLE_PRIORITY , &TaskC ,1);
+    xTaskCreatePinnedToCore(func_IdleFaceTask, "IdleFaceTask", 2048 , NULL , tskIDLE_PRIORITY , &IdleFaceTask ,0);
+    xTaskCreatePinnedToCore(func_SpeakingTask, "SpeakingTask", 2048 , NULL , tskIDLE_PRIORITY , &SpeakingTask ,0);
+    xTaskCreatePinnedToCore(func_SendingToSheetTask, "SendingToSheetTask", 2048 , NULL , tskIDLE_PRIORITY , &SendingToSheetTask ,1);
     xTaskCreatePinnedToCore(func_IdleTextTask, "IdleTextTask", 2048 , NULL , tskIDLE_PRIORITY , &IdleTextTask ,0);
 
-    vTaskSuspend(TaskA); vTaskSuspend(TaskB); vTaskSuspend(TaskC); vTaskSuspend(IdleTextTask);
+    vTaskSuspend(IdleFaceTask); vTaskSuspend(SpeakingTask); vTaskSuspend(SendingToSheetTask); vTaskSuspend(IdleTextTask);
     delay(50);
 
     // ################## Set up LedController(Max7219) ##################
@@ -1012,10 +1003,9 @@ void loop() {
     
     // ################## Button for letting bob sleep ##################
     else if (SwInput == 0x80) {
-        vTaskSuspend(TaskA);
         sleep_status = 1;
         vTaskSuspend(IdleTextTask); // Stop saying "...."
-        vTaskSuspend(TaskA);        // Stop showing idle face 
+        vTaskSuspend(IdleFaceTask);        // Stop showing idle face 
     }
 
     // ################## BoB sleeping ##################
@@ -1040,16 +1030,16 @@ void loop() {
             startSpeaking();
             saySendingToIFTTT();        // Say "Sending to IFTTT"
             returnIdleFace();           // Show idle face
-            vTaskResume(TaskA);         // Continue showing idle face 
-            vTaskSuspend(TaskB);        // Stop speaking
-            vTaskResume(TaskC);         // Start Task for sending to IFTTT
+            vTaskResume(IdleFaceTask);         // Continue showing idle face 
+            vTaskSuspend(SpeakingTask);        // Stop speaking
+            vTaskResume(SendingToSheetTask);         // Start Task for sending to IFTTT
         }                           
         else {
             clear7Seg_max7219();
             startSpeaking();
             sayStopSendingToIFTTT();    // Say "Stop Sending To IFTTT"
             stopSpeaking();
-            vTaskSuspend(TaskC);        // Stop Task for sending to IFTTT
+            vTaskSuspend(SendingToSheetTask);        // Stop Task for sending to IFTTT
         }
     }
     
@@ -1057,17 +1047,17 @@ void loop() {
 }
 
 // Idle face Task
-void func_TaskA(void *param){
+void func_IdleFaceTask(void *param){
     while(1) showIdleFace(); 
 }
 
 // Speaking Task
-void func_TaskB(void *param){
+void func_SpeakingTask(void *param){
     while(1) showSpeaking(); 
 }
 
 // ################ IFTTT Task ################
-void func_TaskC(void *param){
+void func_SendingToSheetTask(void *param){
     while(1){
         getTemp_and_Humid(temp_unit);     // Show Temperature & Humidity on MAX7219
         sendTempAndHumidToSheet();        // Send Temperature & Humidity to google sheet
